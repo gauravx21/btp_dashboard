@@ -22,7 +22,16 @@ def load_and_train():
     # Attempt to load actual data, fallback to realistic synthetic data if CSV is missing
     try:
         df = pd.read_csv("corporateCreditRatingWithFinancialRatios.csv")
-        X = df.drop(columns=['Rating', 'Binary Rating'])
+        
+        # Drop the target columns first
+        X = df.drop(columns=['Rating', 'Binary Rating'], errors='ignore')
+        
+        # Force X to only keep numerical columns (drops text like 'Name' or 'Sector')
+        X = X.select_dtypes(include=['number'])
+        
+        # Fill any missing blank cells with 0 to prevent NaN errors
+        X = X.fillna(0)
+        
         y = df['Binary Rating']
     except FileNotFoundError:
         # Fallback for deployment testing
@@ -61,8 +70,8 @@ predictions = rf_model.predict(X_test_noisy)
 cm_current = confusion_matrix(y_test, predictions)
 
 tn, fp, fn, tp = cm_current.ravel()
-current_type1 = (fn / (fn + tp)) * 100
-current_type2 = (fp / (fp + tn)) * 100
+current_type1 = (fn / (fn + tp)) * 100 if (fn + tp) > 0 else 0
+current_type2 = (fp / (fp + tn)) * 100 if (fp + tn) > 0 else 0
 current_acc = accuracy_score(y_test, predictions) * 100
 
 # 5. Algorithmic Circuit Breaker Logic
