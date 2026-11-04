@@ -22,8 +22,6 @@ noise_level = st.sidebar.slider("Inject Gaussian Noise (σ)", min_value=0.0, max
 def load_and_train():
     try:
         df = pd.read_csv("corporateCreditRatingWithFinancialRatios.csv")
-        
-        # --- MATCH THESE LINES WITH YOUR COLAB NOTEBOOK ---
         y = df['Binary Rating']
         
         # Drop text columns and targets
@@ -32,7 +30,6 @@ def load_and_train():
         
         # Ensure numeric and fill NaNs
         X = X.select_dtypes(include=['number']).fillna(0)
-        # ---------------------------------------------------
         
     except FileNotFoundError:
         # Fallback for deployment testing if CSV is missing
@@ -60,8 +57,10 @@ def load_and_train():
         cm = confusion_matrix(y_test, preds)
         
         tn, fp, fn, tp = cm.ravel()
-        type1_error = (fn / (fn + tp)) * 100 if (fn + tp) > 0 else 0
-        type2_error = (fp / (fp + tn)) * 100 if (fp + tn) > 0 else 0
+        
+        # FIXED: Swapped Type I and Type II mapping to match Colab notebook
+        type1_error = (fp / (fp + tn)) * 100 if (fp + tn) > 0 else 0
+        type2_error = (fn / (fn + tp)) * 100 if (fn + tp) > 0 else 0
         acc = accuracy_score(y_test, preds) * 100
         
         curve_data.append({
@@ -82,8 +81,10 @@ predictions = rf_model.predict(X_test_noisy)
 cm_current = confusion_matrix(y_test, predictions)
 
 tn, fp, fn, tp = cm_current.ravel()
-current_type1 = (fn / (fn + tp)) * 100 if (fn + tp) > 0 else 0
-current_type2 = (fp / (fp + tn)) * 100 if (fp + tn) > 0 else 0
+
+# FIXED: Swapped Type I and Type II mapping to match Colab notebook
+current_type1 = (fp / (fp + tn)) * 100 if (fp + tn) > 0 else 0
+current_type2 = (fn / (fn + tp)) * 100 if (fn + tp) > 0 else 0
 current_acc = accuracy_score(y_test, predictions) * 100
 
 # 5. Algorithmic Circuit Breaker Logic
@@ -107,14 +108,15 @@ with col_chart:
     st.subheader("Reliability Degradation Curve")
     fig, ax = plt.subplots(figsize=(10, 5))
     
-    sns.lineplot(data=df_curve, x="Noise", y="Accuracy", label="Accuracy (%)", color="green", linewidth=2, ax=ax)
-    sns.lineplot(data=df_curve, x="Noise", y="Type II Error", label="Type II (False Alarms)", color="red", linewidth=2, ax=ax)
-    sns.lineplot(data=df_curve, x="Noise", y="Type I Error", label="Type I (Missed Defaults)", color="blue", linewidth=2, ax=ax)
+    # Styled exactly like your Colab graph
+    sns.lineplot(data=df_curve, x="Noise", y="Type II Error", label="Type II (False Alarms)", color="orange", linestyle="--", linewidth=2.5, ax=ax)
+    sns.lineplot(data=df_curve, x="Noise", y="Type I Error", label="Type I (Missed Defaults)", color="#e74c3c", linewidth=2.5, ax=ax)
     
+    ax.axhline(y=20, color='gray', linestyle=':', label='20% Failure Threshold')
     ax.axvline(x=noise_level, color='gray', linestyle='--', label=f'Current Noise ({noise_level}σ)')
     
-    ax.set_xlabel("Gaussian Noise (Standard Deviations)")
-    ax.set_ylabel("Percentage (%)")
+    ax.set_xlabel("Market Volatility Level (Standard Deviation of Gaussian Noise)")
+    ax.set_ylabel("Failure Rate (%)")
     ax.legend()
     st.pyplot(fig)
 
