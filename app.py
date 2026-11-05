@@ -1,8 +1,8 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
+import plotly.graph_objects as go
+import plotly.express as px
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import confusion_matrix, accuracy_score
@@ -10,61 +10,50 @@ from sklearn.preprocessing import StandardScaler
 
 # 1. Page Configuration
 st.set_page_config(page_title="Dashboard", layout="wide")
-st.title("Dashboard")
-st.markdown("### Algorithmic Reliability & FMEA Terminal")
+st.title("Algorithmic Reliability & FMEA Terminal")
+st.markdown("Stress-testing AI models under simulated systemic market volatility.")
 
-# 2. Sidebar Controls
-st.sidebar.header("Market Volatility Simulation")
-noise_level = st.sidebar.slider("Inject Gaussian Noise (σ)", min_value=0.0, max_value=3.0, value=0.0, step=0.1)
-
-# 3. Data Loading, Preprocessing & Model Training (Cached for speed)
+# 2. Data Loading, Preprocessing & Model Training (Cached for speed)
 @st.cache_data
 def load_and_train():
     try:
         df = pd.read_csv("corporateCreditRatingWithFinancialRatios.csv")
         y = df['Binary Rating']
         
-        # Drop text columns and targets
         cols_to_drop = ['Rating', 'Binary Rating', 'Name', 'Symbol', 'Rating Agency Name', 'Date', 'Sector']
         X = df.drop(columns=[c for c in cols_to_drop if c in df.columns], errors='ignore')
-        
-        # Ensure numeric and fill NaNs
         X = X.select_dtypes(include=['number']).fillna(0)
         
     except FileNotFoundError:
-        # Fallback for deployment testing if CSV is missing
         np.random.seed(42)
         X = pd.DataFrame(np.random.randn(2500, 10), columns=[f"Feature_{i}" for i in range(10)])
         y = np.where(X['Feature_0'] + X['Feature_1'] > 0, 1, 0)
 
-    # Scale features so Gaussian noise affects all features uniformly
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
 
-    # Train/Test Split
     X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.3, random_state=42)
     
-    # Train Baseline Model
     rf = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
     rf.fit(X_train, y_train)
     
-    # Pre-calculate exact degradation curve
+    # Pre-calculate exact degradation curve using fine 0.05 steps for smoother trajectory
     curve_data = []
-    for n in np.arange(0.0, 3.1, 0.1):
-        np.random.seed(42) # Lock seed for reproducibility
+    for n in np.arange(0.0, 3.05, 0.05):
+        np.random.seed(42) 
         noisy_X = X_test + np.random.normal(0, n, X_test.shape)
         preds = rf.predict(noisy_X)
         cm = confusion_matrix(y_test, preds)
         
         tn, fp, fn, tp = cm.ravel()
         
-        # FIXED: Swapped Type I and Type II mapping to match Colab notebook
+        # Consistent mapping with your Colab model
         type1_error = (fp / (fp + tn)) * 100 if (fp + tn) > 0 else 0
         type2_error = (fn / (fn + tp)) * 100 if (fn + tp) > 0 else 0
         acc = accuracy_score(y_test, preds) * 100
         
         curve_data.append({
-            "Noise": round(n, 1), 
+            "Noise": round(n, 2), 
             "Accuracy": acc, 
             "Type I Error": type1_error, 
             "Type II Error": type2_error
@@ -74,6 +63,17 @@ def load_and_train():
 
 X_test, y_test, rf_model, df_curve = load_and_train()
 
+# 3. Main Wide Slider Control
+st.markdown("### Market Volatility Simulation")
+noise_level = st.slider(
+    "Inject Gaussian Noise (σ)", 
+    min_value=0.00, 
+    max_value=3.00, 
+    value=0.00, 
+    step=0.05,
+    help="Drag this slider to simulate increasing levels of market volatility."
+)
+
 # 4. Apply Noise for Current Slider Value
 np.random.seed(42)
 X_test_noisy = X_test + np.random.normal(0, noise_level, X_test.shape)
@@ -82,16 +82,17 @@ cm_current = confusion_matrix(y_test, predictions)
 
 tn, fp, fn, tp = cm_current.ravel()
 
-# FIXED: Swapped Type I and Type II mapping to match Colab notebook
+# Consistent mapping with your Colab model
 current_type1 = (fp / (fp + tn)) * 100 if (fp + tn) > 0 else 0
 current_type2 = (fn / (fn + tp)) * 100 if (fn + tp) > 0 else 0
 current_acc = accuracy_score(y_test, predictions) * 100
 
 # 5. Algorithmic Circuit Breaker Logic
+st.divider()
 if current_type2 > 20.0:
-    st.error(f"🚨 CIRCUIT BREAKER TRIGGERED: Type II False Alarms breached 20% safety threshold at {noise_level}σ market volatility.")
+    st.error(f"🚨 **CIRCUIT BREAKER TRIGGERED:** Type II False Alarms breached 20% safety threshold at {noise_level:.2f}σ market volatility.")
 else:
-    st.success("✅ SYSTEM STABLE: Error rates within normal operating limits.")
+    st.success(f"✅ **SYSTEM STABLE:** Error rates within normal operating limits at {noise_level:.2f}σ.")
 
 # 6. Dashboard Metrics
 col1, col2, col3 = st.columns(3)
@@ -101,29 +102,45 @@ col3.metric("Type II Error (False Alarms)", f"{current_type2:.1f}%")
 
 st.divider()
 
-# 7. Visualizations
+# 7. Interactive Plotly Visualizations
 col_chart, col_matrix = st.columns([2, 1])
 
 with col_chart:
-    st.subheader("Reliability Degradation Curve")
-    fig, ax = plt.subplots(figsize=(10, 5))
+    st.subheader("Failure Rate Trajectory")
     
-    # Styled exactly like your Colab graph
-    sns.lineplot(data=df_curve, x="Noise", y="Type II Error", label="Type II (False Alarms)", color="orange", linestyle="--", linewidth=2.5, ax=ax)
-    sns.lineplot(data=df_curve, x="Noise", y="Type I Error", label="Type I (Missed Defaults)", color="#e74c3c", linewidth=2.5, ax=ax)
+    # Modern Interactive Plotly Chart
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df_curve['Noise'], y=df_curve['Type II Error'], mode='lines', name='Type II (False Alarms)', line=dict(color='#e74c3c', width=3)))
+    fig.add_trace(go.Scatter(x=df_curve['Noise'], y=df_curve['Type I Error'], mode='lines', name='Type I (Missed Defaults)', line=dict(color='#2980b9', width=3)))
+    fig.add_trace(go.Scatter(x=df_curve['Noise'], y=df_curve['Accuracy'], mode='lines', name='Accuracy (%)', line=dict(color='#27ae60', width=2, dash='dot')))
     
-    ax.axhline(y=20, color='gray', linestyle=':', label='20% Failure Threshold')
-    ax.axvline(x=noise_level, color='gray', linestyle='--', label=f'Current Noise ({noise_level}σ)')
+    # 20% Threshold Line
+    fig.add_hline(y=20, line_width=2, line_dash="dash", line_color="gray", annotation_text="20% Failure Threshold", annotation_position="bottom right")
     
-    ax.set_xlabel("Market Volatility Level (Standard Deviation of Gaussian Noise)")
-    ax.set_ylabel("Failure Rate (%)")
-    ax.legend()
-    st.pyplot(fig)
+    # Current Slider Tracker Line
+    fig.add_vline(x=noise_level, line_width=2, line_color="black", annotation_text=f"Current: {noise_level:.2f}σ", annotation_position="top right")
+    
+    fig.update_layout(
+        xaxis_title="Gaussian Noise (Standard Deviations)",
+        yaxis_title="Percentage (%)",
+        hovermode="x unified",
+        template="plotly_white",
+        margin=dict(l=0, r=0, t=30, b=0)
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
 with col_matrix:
-    st.subheader(f"Confusion Matrix ({noise_level}σ)")
-    fig2, ax2 = plt.subplots(figsize=(5, 4))
-    sns.heatmap(cm_current, annot=True, fmt='d', cmap='Blues', cbar=False, ax=ax2)
-    ax2.set_xlabel('Predicted Status')
-    ax2.set_ylabel('Actual Status')
-    st.pyplot(fig2)
+    st.subheader("Confusion Matrix")
+    
+    # Modern Plotly Heatmap
+    fig2 = px.imshow(
+        cm_current, 
+        text_auto=True, 
+        color_continuous_scale='Blues',
+        labels=dict(x="Predicted Status", y="Actual Status"),
+        x=['0', '1'],
+        y=['0', '1']
+    )
+    fig2.update_xaxes(side="bottom")
+    fig2.update_layout(coloraxis_showscale=False, margin=dict(l=0, r=0, t=30, b=0))
+    st.plotly_chart(fig2, use_container_width=True)
