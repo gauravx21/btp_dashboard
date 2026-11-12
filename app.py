@@ -6,7 +6,7 @@ import plotly.express as px
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import confusion_matrix, accuracy_score
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import RobustScaler
 
 # 1. Page Configuration
 st.set_page_config(page_title="Algorithmic Reliability & FMEA Terminal", layout="wide")
@@ -33,30 +33,50 @@ def load_and_train():
         X = pd.DataFrame(np.random.randn(2500, 16), columns=[f"Feature_{i}" for i in range(16)])
         y = np.where(X["Feature_0"] + X["Feature_1"] > 0, 1, 0)
 
-    scaler = StandardScaler()
+    # FIX 1: RobustScaler (Immune to extreme financial ratio outliers)
+    scaler = RobustScaler()
     X_scaled = scaler.fit_transform(X)
 
     X_train, X_test, y_train, y_test = train_test_split(
         X_scaled, y, test_size=0.3, random_state=42
     )
 
-    # Tuned Random Forest (single-threaded to stay well within Streamlit Cloud's 1GB RAM)
+    # FIX 2: Multi-Scale Noise Augmentation (0.15s to 1.00s)
+    np.random.seed(42)
+    aug_X = [X_train]
+    aug_y = [y_train]
+    for s in [0.15, 0.30, 0.50, 0.75, 1.00]:
+        aug_X.append(X_train + np.random.normal(0, s, X_train.shape))
+        aug_y.append(y_train)
+
+    X_train_aug = np.vstack(aug_X)
+    y_train_aug = np.hstack(aug_y)
+
+    # FIX 3: Asymmetric Class Weighting & Regularization
     best_rf = RandomForestClassifier(
         n_estimators=200,
-        max_depth=20,
-        min_samples_split=5,
-        min_samples_leaf=1,
+        max_depth=18,
+        min_samples_split=6,
+        min_samples_leaf=2,
+        class_weight={0: 2.3, 1: 1.0}, # Heavy penalty for missing Distressed class
         random_state=42,
         n_jobs=1
     )
-    best_rf.fit(X_train, y_train)
+    best_rf.fit(X_train_aug, y_train_aug)
 
+    # FIX 3 (continued): Strict 61% confidence threshold required to classify as 'Safe'
+    decision_threshold = 0.61
+    
     # Pre-calculate degradation trajectory across 0.00 to 3.00 sigma
     curve_data = []
     for n in np.arange(0.0, 3.05, 0.05):
         np.random.seed(42)
         noisy_X = X_test + np.random.normal(0, n, X_test.shape)
-        preds = best_rf.predict(noisy_X)
+        
+        # Apply strict probability threshold
+        probs = best_rf.predict_proba(noisy_X)[:, 1]
+        preds = (probs >= decision_threshold).astype(int)
+        
         tn, fp, fn, tp = confusion_matrix(y_test, preds).ravel()
 
         type1_error = (fp / (fp + tn)) * 100 if (fp + tn) > 0 else 0
@@ -70,9 +90,9 @@ def load_and_train():
             "Type II Error": type2_error
         })
 
-    return X_test, y_test, best_rf, pd.DataFrame(curve_data)
+    return X_test, y_test, best_rf, pd.DataFrame(curve_data), decision_threshold
 
-X_test, y_test, rf_model, df_curve = load_and_train()
+X_test, y_test, rf_model, df_curve, decision_threshold = load_and_train()
 
 # 3. Wide Slider Control
 st.markdown("### Market Volatility Simulation")
@@ -88,23 +108,30 @@ noise_level = st.slider(
 # 4. Evaluate Current Slider Value
 np.random.seed(42)
 X_test_noisy = X_test + np.random.normal(0, noise_level, X_test.shape)
-predictions = rf_model.predict(X_test_noisy)
-cm_current = confusion_matrix(y_test, predictions)
+probs_current = rf_model.predict_proba(X_test_noisy)[:, 1]
+predictions = (probs_current >= decision_threshold).astype(int)
 
+cm_current = confusion_matrix(y_test, predictions)
 tn, fp, fn, tp = cm_current.ravel()
+
 current_type1 = (fp / (fp + tn)) * 100 if (fp + tn) > 0 else 0
 current_type2 = (fn / (fn + tp)) * 100 if (fn + tp) > 0 else 0
 current_acc = accuracy_score(y_test, predictions) * 100
 
-# 5. Algorithmic Circuit Breaker Logic
+# FIX 4: DUAL-TRIGGER Algorithmic Circuit Breaker Logic
 st.divider()
-if current_type2 > 20.0:
+if current_type1 > 20.0 or current_type2 > 20.0:
+    breach_type = []
+    if current_type1 > 20.0: breach_type.append("Type I (Missed Defaults)")
+    if current_type2 > 20.0: breach_type.append("Type II (False Alarms)")
+    breach_text = " and ".join(breach_type)
+    
     st.error(
-        f"🚨 **CIRCUIT BREAKER TRIGGERED:** Type II False Alarms breached the 20% safety threshold at {noise_level:.2f}σ market volatility."
+        f"🚨 **CIRCUIT BREAKER TRIGGERED:** {breach_text} breached the 20% safety threshold at {noise_level:.2f}σ market volatility."
     )
 else:
     st.success(
-        f"✅ **SYSTEM STABLE:** Error rates within normal operating limits at {noise_level:.2f}σ."
+        f"✅ **SYSTEM STABLE:** Both error rates are safely within normal operating limits at {noise_level:.2f}σ."
     )
 
 # 6. Dashboard Metrics
@@ -123,14 +150,14 @@ with col_chart:
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(
+        x=df_curve["Noise"], y=df_curve["Type I Error"],
+        mode="lines", name="Type I (Missed Defaults - Fatal)",
+        line=dict(color="#2980b9", width=3)
+    ))
+    fig.add_trace(go.Scatter(
         x=df_curve["Noise"], y=df_curve["Type II Error"],
         mode="lines", name="Type II (False Alarms)",
         line=dict(color="#e74c3c", width=3)
-    ))
-    fig.add_trace(go.Scatter(
-        x=df_curve["Noise"], y=df_curve["Type I Error"],
-        mode="lines", name="Type I (Missed Defaults)",
-        line=dict(color="#2980b9", width=3)
     ))
     fig.add_trace(go.Scatter(
         x=df_curve["Noise"], y=df_curve["Accuracy"],
