@@ -13,9 +13,9 @@ st.set_page_config(page_title="Algorithmic Reliability & FMEA Terminal", layout=
 st.title("Algorithmic Reliability & FMEA Terminal")
 st.markdown("Stress-testing AI models under simulated systemic market volatility.")
 
-# 2. Data Loading, Preprocessing & Model Training (Cached in memory)
+# Force Cache Clearing by renaming the cached function
 @st.cache_resource
-def load_and_train():
+def load_and_train_synced_v2():
     try:
         df_raw = pd.read_csv("corporateCreditRatingWithFinancialRatios.csv")
         columns_to_drop = [
@@ -51,6 +51,7 @@ def load_and_train():
     X_train_aug = np.vstack(aug_X)
     y_train_aug = np.hstack(aug_y)
 
+    # Use n_jobs=-1 as executed in the Colab screenshot
     best_rf = RandomForestClassifier(
         n_estimators=200,
         max_depth=18,
@@ -58,7 +59,7 @@ def load_and_train():
         min_samples_leaf=2,
         class_weight={0: 2.3, 1: 1.0},
         random_state=42,
-        n_jobs=1
+        n_jobs=-1
     )
     best_rf.fit(X_train_aug, y_train_aug)
 
@@ -89,7 +90,7 @@ def load_and_train():
 
     return X_test, y_test, best_rf, pd.DataFrame(curve_data), decision_threshold
 
-X_test, y_test, rf_model, df_curve, decision_threshold = load_and_train()
+X_test, y_test, rf_model, df_curve, decision_threshold = load_and_train_synced_v2()
 
 # 3. Wide Slider Control
 st.markdown("### Market Volatility Simulation")
@@ -133,7 +134,7 @@ else:
 
 # 6. Dashboard Metrics
 col1, col2, col3 = st.columns(3)
-col1.metric("Optimized Model Accuracy", f"{current_acc:.1f}%")
+col1.metric("Optimized Model Accuracy", f"{current_acc:.2f}%")
 col2.metric("Type I Error (Missed Defaults)", f"{current_type1:.1f}%")
 col3.metric("Type II Error (False Alarms)", f"{current_type2:.1f}%")
 
