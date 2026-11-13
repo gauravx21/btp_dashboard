@@ -1,3 +1,5 @@
+import os
+import json
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -13,9 +15,17 @@ st.set_page_config(page_title="Algorithmic Reliability & FMEA Terminal", layout=
 st.title("Algorithmic Reliability & FMEA Terminal")
 st.markdown("Stress-testing AI models under simulated systemic market volatility.")
 
-# Force Cache Clearing by renaming the cached function
+# 2. Load Exact Colab Trajectory or Train Identical Pipeline
 @st.cache_resource
-def load_and_train_synced_v2():
+def load_fmea_trajectory_v3():
+    # Priority 1: Direct bit-for-bit Colab export file if present in repository
+    if os.path.exists("fmea_colab_results.json"):
+        with open("fmea_colab_results.json", "r") as f:
+            records = json.load(f)
+        df_curve = pd.DataFrame(records)
+        return df_curve, "Synced directly with Google Colab output"
+
+    # Priority 2: Exact Colab pipeline execution (requires scikit-learn==1.6.1 in requirements.txt)
     try:
         df_raw = pd.read_csv("corporateCreditRatingWithFinancialRatios.csv")
         columns_to_drop = [
@@ -23,12 +33,9 @@ def load_and_train_synced_v2():
             'CIK', 'SIC Code', 'Sector', 'Ticker',
             'Name', 'Symbol', 'Rating Agency Name', 'Date'
         ]
-        
-        # EXACT PARITY WITH COLAB: Apply dropna() on the entire dataset first
         df = df_raw.drop(columns=[c for c in columns_to_drop if c in df_raw.columns], errors='ignore').dropna()
         y = df['Binary Rating']
         X = df.drop(columns=['Binary Rating']).select_dtypes(include=['number']).fillna(0)
-
     except FileNotFoundError:
         np.random.seed(42)
         X = pd.DataFrame(np.random.randn(2500, 16), columns=[f"Feature_{i}" for i in range(16)])
@@ -51,7 +58,6 @@ def load_and_train_synced_v2():
     X_train_aug = np.vstack(aug_X)
     y_train_aug = np.hstack(aug_y)
 
-    # Use n_jobs=-1 as executed in the Colab screenshot
     best_rf = RandomForestClassifier(
         n_estimators=200,
         max_depth=18,
@@ -64,33 +70,34 @@ def load_and_train_synced_v2():
     best_rf.fit(X_train_aug, y_train_aug)
 
     decision_threshold = 0.61
-    
-    # Pre-calculate degradation trajectory matching Colab loop exactly
     curve_data = []
     noise_levels = np.arange(0.0, 3.05, 0.05)
+
     for noise in noise_levels:
         np.random.seed(42)
         noisy_X = X_test + np.random.normal(0, noise, X_test.shape)
-        
         probs = best_rf.predict_proba(noisy_X)[:, 1]
         preds = (probs >= decision_threshold).astype(int)
-        
-        tn, fp, fn, tp = confusion_matrix(y_test, preds).ravel()
 
-        type1_error = (fp / (fp + tn)) * 100 if (fp + tn) > 0 else 0
-        type2_error = (fn / (fn + tp)) * 100 if (fn + tp) > 0 else 0
+        tn, fp, fn, tp = confusion_matrix(y_test, preds).ravel()
+        type1_error = (fp / (fp + tn)) * 100 if (fp + tn) > 0 else 0.0
+        type2_error = (fn / (fn + tp)) * 100 if (fn + tp) > 0 else 0.0
         acc = accuracy_score(y_test, preds) * 100
 
         curve_data.append({
             "Noise": round(float(noise), 2),
-            "Accuracy": acc,
-            "Type I Error": type1_error,
-            "Type II Error": type2_error
+            "Accuracy": float(acc),
+            "Type I Error": float(type1_error),
+            "Type II Error": float(type2_error),
+            "tn": int(tn),
+            "fp": int(fp),
+            "fn": int(fn),
+            "tp": int(tp)
         })
 
-    return X_test, y_test, best_rf, pd.DataFrame(curve_data), decision_threshold
+    return pd.DataFrame(curve_data), "Computed via pinned scikit-learn==1.6.1 runtime"
 
-X_test, y_test, rf_model, df_curve, decision_threshold = load_and_train_synced_v2()
+df_curve, sync_source = load_fmea_trajectory_v3()
 
 # 3. Wide Slider Control
 st.markdown("### Market Volatility Simulation")
@@ -103,27 +110,27 @@ noise_level = st.slider(
     help="Drag this slider to simulate increasing levels of systemic market volatility."
 )
 
-# 4. Pull pre-calculated metrics matching the slider value exactly
-current_metrics = df_curve[df_curve['Noise'] == round(noise_level, 2)].iloc[0]
-current_acc = current_metrics['Accuracy']
-current_type1 = current_metrics['Type I Error']
-current_type2 = current_metrics['Type II Error']
+# 4. Lookup Exact Pre-Calculated Row Matching Slider Value
+current_metrics = df_curve[df_curve["Noise"] == round(noise_level, 2)].iloc[0]
+current_acc = current_metrics["Accuracy"]
+current_type1 = current_metrics["Type I Error"]
+current_type2 = current_metrics["Type II Error"]
 
-# Calculate exact confusion matrix for the visual
-np.random.seed(42)
-X_test_noisy = X_test + np.random.normal(0, noise_level, X_test.shape)
-probs_current = rf_model.predict_proba(X_test_noisy)[:, 1]
-predictions = (probs_current >= decision_threshold).astype(int)
-cm_current = confusion_matrix(y_test, predictions)
+cm_current = np.array([
+    [int(current_metrics["tn"]), int(current_metrics["fp"])],
+    [int(current_metrics["fn"]), int(current_metrics["tp"])]
+])
 
 # 5. DUAL-TRIGGER Algorithmic Circuit Breaker Logic
 st.divider()
 if current_type1 > 20.0 or current_type2 > 20.0:
     breach_type = []
-    if current_type1 > 20.0: breach_type.append("Type I (Missed Defaults)")
-    if current_type2 > 20.0: breach_type.append("Type II (False Alarms)")
+    if current_type1 > 20.0:
+        breach_type.append("Type I (Missed Defaults)")
+    if current_type2 > 20.0:
+        breach_type.append("Type II (False Alarms)")
     breach_text = " and ".join(breach_type)
-    
+
     st.error(
         f"🚨 **CIRCUIT BREAKER TRIGGERED:** {breach_text} breached the 20% safety threshold at {noise_level:.2f}σ market volatility."
     )
@@ -155,17 +162,17 @@ with col_chart:
     fig.add_trace(go.Scatter(
         x=df_curve["Noise"], y=df_curve["Type II Error"],
         mode="lines", name="Type II (False Alarms)",
-        line=dict(color="#e74c3c", width=3)
+        line=dict(color="#e74c3c", width=3, dash="dash")
     ))
     fig.add_trace(go.Scatter(
         x=df_curve["Noise"], y=df_curve["Accuracy"],
-        mode="lines", name="Accuracy (%)",
+        mode="lines", name="Model Accuracy (%)",
         line=dict(color="#27ae60", width=2, dash="dot")
     ))
 
     fig.add_hline(
-        y=20, line_width=2, line_dash="dash", line_color="gray",
-        annotation_text="20% Failure Threshold", annotation_position="bottom right"
+        y=20, line_width=2, line_dash="dashdot", line_color="gray",
+        annotation_text="20% Circuit Breaker Threshold", annotation_position="bottom right"
     )
     fig.add_vline(
         x=noise_level, line_width=2, line_color="black",
