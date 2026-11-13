@@ -17,23 +17,23 @@ st.markdown("Stress-testing AI models under simulated systemic market volatility
 @st.cache_resource
 def load_and_train():
     try:
-        df = pd.read_csv("corporateCreditRatingWithFinancialRatios.csv")
-        y = df["Binary Rating"]
-
-        cols_to_drop = [
-            "Rating Agency", "Corporation", "Rating", "Rating Date",
-            "CIK", "SIC Code", "Sector", "Ticker",
-            "Binary Rating", "Name", "Symbol", "Rating Agency Name", "Date"
+        df_raw = pd.read_csv("corporateCreditRatingWithFinancialRatios.csv")
+        columns_to_drop = [
+            'Rating Agency', 'Corporation', 'Rating', 'Rating Date',
+            'CIK', 'SIC Code', 'Sector', 'Ticker',
+            'Name', 'Symbol', 'Rating Agency Name', 'Date'
         ]
-        X = df.drop(columns=[c for c in cols_to_drop if c in df.columns], errors="ignore")
-        X = X.select_dtypes(include=["number"]).fillna(0)
+        
+        # EXACT PARITY WITH COLAB: Apply dropna() on the entire dataset first
+        df = df_raw.drop(columns=[c for c in columns_to_drop if c in df_raw.columns], errors='ignore').dropna()
+        y = df['Binary Rating']
+        X = df.drop(columns=['Binary Rating']).select_dtypes(include=['number']).fillna(0)
 
     except FileNotFoundError:
         np.random.seed(42)
         X = pd.DataFrame(np.random.randn(2500, 16), columns=[f"Feature_{i}" for i in range(16)])
         y = np.where(X["Feature_0"] + X["Feature_1"] > 0, 1, 0)
 
-    # FIX 1: RobustScaler (Immune to extreme financial ratio outliers)
     scaler = RobustScaler()
     X_scaled = scaler.fit_transform(X)
 
@@ -41,7 +41,6 @@ def load_and_train():
         X_scaled, y, test_size=0.3, random_state=42
     )
 
-    # FIX 2: Multi-Scale Noise Augmentation (0.15s to 1.00s)
     np.random.seed(42)
     aug_X = [X_train]
     aug_y = [y_train]
@@ -52,28 +51,26 @@ def load_and_train():
     X_train_aug = np.vstack(aug_X)
     y_train_aug = np.hstack(aug_y)
 
-    # FIX 3: Asymmetric Class Weighting & Regularization
     best_rf = RandomForestClassifier(
         n_estimators=200,
         max_depth=18,
         min_samples_split=6,
         min_samples_leaf=2,
-        class_weight={0: 2.3, 1: 1.0}, # Heavy penalty for missing Distressed class
+        class_weight={0: 2.3, 1: 1.0},
         random_state=42,
         n_jobs=1
     )
     best_rf.fit(X_train_aug, y_train_aug)
 
-    # FIX 3 (continued): Strict 61% confidence threshold required to classify as 'Safe'
     decision_threshold = 0.61
     
-    # Pre-calculate degradation trajectory across 0.00 to 3.00 sigma
+    # Pre-calculate degradation trajectory matching Colab loop exactly
     curve_data = []
-    for n in np.arange(0.0, 3.05, 0.05):
+    noise_levels = np.arange(0.0, 3.05, 0.05)
+    for noise in noise_levels:
         np.random.seed(42)
-        noisy_X = X_test + np.random.normal(0, n, X_test.shape)
+        noisy_X = X_test + np.random.normal(0, noise, X_test.shape)
         
-        # Apply strict probability threshold
         probs = best_rf.predict_proba(noisy_X)[:, 1]
         preds = (probs >= decision_threshold).astype(int)
         
@@ -84,7 +81,7 @@ def load_and_train():
         acc = accuracy_score(y_test, preds) * 100
 
         curve_data.append({
-            "Noise": round(float(n), 2),
+            "Noise": round(float(noise), 2),
             "Accuracy": acc,
             "Type I Error": type1_error,
             "Type II Error": type2_error
@@ -105,20 +102,20 @@ noise_level = st.slider(
     help="Drag this slider to simulate increasing levels of systemic market volatility."
 )
 
-# 4. Evaluate Current Slider Value
+# 4. Pull pre-calculated metrics matching the slider value exactly
+current_metrics = df_curve[df_curve['Noise'] == round(noise_level, 2)].iloc[0]
+current_acc = current_metrics['Accuracy']
+current_type1 = current_metrics['Type I Error']
+current_type2 = current_metrics['Type II Error']
+
+# Calculate exact confusion matrix for the visual
 np.random.seed(42)
 X_test_noisy = X_test + np.random.normal(0, noise_level, X_test.shape)
 probs_current = rf_model.predict_proba(X_test_noisy)[:, 1]
 predictions = (probs_current >= decision_threshold).astype(int)
-
 cm_current = confusion_matrix(y_test, predictions)
-tn, fp, fn, tp = cm_current.ravel()
 
-current_type1 = (fp / (fp + tn)) * 100 if (fp + tn) > 0 else 0
-current_type2 = (fn / (fn + tp)) * 100 if (fn + tp) > 0 else 0
-current_acc = accuracy_score(y_test, predictions) * 100
-
-# FIX 4: DUAL-TRIGGER Algorithmic Circuit Breaker Logic
+# 5. DUAL-TRIGGER Algorithmic Circuit Breaker Logic
 st.divider()
 if current_type1 > 20.0 or current_type2 > 20.0:
     breach_type = []
